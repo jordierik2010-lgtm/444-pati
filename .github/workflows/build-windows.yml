@@ -1,0 +1,87 @@
+name: Build 444CFG TOOL (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Buscar carpeta del proyecto
+        shell: pwsh
+        run: |
+          $projects = Get-ChildItem -Path . -Filter package.json -Recurse -File |
+            Where-Object {
+              Test-Path (Join-Path $_.DirectoryName "src-tauri/Cargo.toml")
+            }
+
+          $project = $projects | Select-Object -First 1
+
+          if (-not $project) {
+            throw "No se encuentra el proyecto 444CFG TOOL"
+          }
+
+          "PROJECT_DIR=$($project.DirectoryName)" >> $env:GITHUB_ENV
+          Write-Host "Proyecto encontrado: $($project.DirectoryName)"
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Instalar dependencias
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install
+
+      - name: Configurar KEY publica
+        shell: pwsh
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          CFG444_PUBLIC_KEY_HEX: ${{ secrets.CFG444_PUBLIC_KEY_HEX }}
+        run: |
+          $key = "$env:CFG444_PUBLIC_KEY_HEX".Trim()
+
+          if ($key -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Falta configurar la clave publica en GitHub"
+          }
+
+          Set-Content -Path src-tauri/public.key -Value $key -NoNewline
+
+      - name: Comprobar TypeScript
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run typecheck
+
+      - name: Comprobar licencias
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run test:keys
+
+      - name: Comprobar Rust
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Compilar EXE
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npx tauri build
+
+      - name: Guardar instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: 444CFG-TOOL-SETUP
+          path: ${{ env.PROJECT_DIR }}/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Guardar EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: 444CFG-TOOL-EXE
+          path: ${{ env.PROJECT_DIR }}/src-tauri/target/release/cfg444-tool.exe
+          if-no-files-found: error
